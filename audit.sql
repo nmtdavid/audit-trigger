@@ -1,42 +1,36 @@
--- An audit history is important on most tables. Provide an audit trigger that logs to
--- a dedicated audit table for the major relations.
+-- Un historial de auditoría es importante en la mayoría de las Tablas de la Base de Datos. 
+-- Proporcionar un Trigger de auditoría que registra a una tabla de auditoría las transacciones.
 --
--- This file should be generic and not depend on application roles or structures,
--- as it's being listed here:
+-- Este archivo debe ser genérica y no depender de las funciones de aplicación o estructuras,
+-- Como está siendo anunciado aquí: https://wiki.postgresql.org/wiki/Audit_trigger_91plus
 --
---    https://wiki.postgresql.org/wiki/Audit_trigger_91plus    
+-- Este disparador se basó originalmente en http://wiki.postgresql.org/wiki/Audit_trigger
+-- Pero ha sido reescrito por completo.
 --
--- This trigger was originally based on
---   http://wiki.postgresql.org/wiki/Audit_trigger
--- but has been completely rewritten.
---
--- Should really be converted into a relocatable EXTENSION, with control and upgrade files.
+-- En realidad debería ser convertido en una extensión reubicable, con control y actualizar archivos.
 
 CREATE EXTENSION IF NOT EXISTS hstore;
 
-CREATE SCHEMA audit;
-REVOKE ALL ON SCHEMA audit FROM public;
+CREATE SCHEMA auditoria;
+REVOKE ALL ON SCHEMA auditoria FROM public;
 
-COMMENT ON SCHEMA audit IS 'Out-of-table audit/history logging tables and trigger functions';
+COMMENT ON SCHEMA auditoria IS 'Datos auditado/historico registro de eventos Tablas y funciones Trigger';
 
 --
--- Audited data. Lots of information is available, it's just a matter of how much
--- you really want to record. See:
+-- Datos auditados. Gran cantidad de información está disponible, es sólo una cuestión de cuánto 
+-- realmente desea grabar. Ver: http://www.postgresql.org/docs/9.1/static/functions-info.html
 --
---   http://www.postgresql.org/docs/9.1/static/functions-info.html
+-- Recuerde, cada columna que se agrega ocupa más espacio en tabla de auditoría y ralentiza inserción 
+-- de registros auditoría. 
 --
--- Remember, every column you add takes up more audit table space and slows audit
--- inserts.
+-- También cada índice se agrega tiene un gran impacto, así que evite agregar índices a la tabla de
+-- registro de auditoría a menos que realmente se necesite. Los índices hstore GIST son especialmente
+-- costosos.
 --
--- Every index you add has a big impact too, so avoid adding indexes to the
--- audit table unless you REALLY need them. The hstore GIST indexes are
--- particularly expensive.
+-- A veces es recomendable realizar una copia de la tabla de auditoría, o un subconjunto del mismo 
+-- que le interesa, en una tabla temporal y crear cualquier índice útil y sobre eso hacer su análisis
 --
--- It is sometimes worth copying the audit table, or a coarse subset of it that
--- you're interested in, into a temporary table where you CREATE any useful
--- indexes and do your analysis.
---
-CREATE TABLE audit.logged_actions (
+CREATE TABLE auditoria.registro_comportamiento (
     event_id bigserial primary key,
     schema_name text not null,
     table_name text not null,
@@ -56,34 +50,34 @@ CREATE TABLE audit.logged_actions (
     statement_only boolean not null
 );
 
-REVOKE ALL ON audit.logged_actions FROM public;
+REVOKE ALL ON auditoria.registro_comportamiento FROM public;
 
-COMMENT ON TABLE audit.logged_actions IS 'History of auditable actions on audited tables, from audit.if_modified_func()';
-COMMENT ON COLUMN audit.logged_actions.event_id IS 'Unique identifier for each auditable event';
-COMMENT ON COLUMN audit.logged_actions.schema_name IS 'Database schema audited table for this event is in';
-COMMENT ON COLUMN audit.logged_actions.table_name IS 'Non-schema-qualified table name of table event occured in';
-COMMENT ON COLUMN audit.logged_actions.relid IS 'Table OID. Changes with drop/create. Get with ''tablename''::regclass';
-COMMENT ON COLUMN audit.logged_actions.session_user_name IS 'Login / session user whose statement caused the audited event';
-COMMENT ON COLUMN audit.logged_actions.action_tstamp_tx IS 'Transaction start timestamp for tx in which audited event occurred';
-COMMENT ON COLUMN audit.logged_actions.action_tstamp_stm IS 'Statement start timestamp for tx in which audited event occurred';
-COMMENT ON COLUMN audit.logged_actions.action_tstamp_clk IS 'Wall clock time at which audited event''s trigger call occurred';
-COMMENT ON COLUMN audit.logged_actions.transaction_id IS 'Identifier of transaction that made the change. May wrap, but unique paired with action_tstamp_tx.';
-COMMENT ON COLUMN audit.logged_actions.client_addr IS 'IP address of client that issued query. Null for unix domain socket.';
-COMMENT ON COLUMN audit.logged_actions.client_port IS 'Remote peer IP port address of client that issued query. Undefined for unix socket.';
-COMMENT ON COLUMN audit.logged_actions.client_query IS 'Top-level query that caused this auditable event. May be more than one statement.';
-COMMENT ON COLUMN audit.logged_actions.application_name IS 'Application name set when this audit event occurred. Can be changed in-session by client.';
-COMMENT ON COLUMN audit.logged_actions.action IS 'Action type; I = insert, D = delete, U = update, T = truncate';
-COMMENT ON COLUMN audit.logged_actions.row_data IS 'Record value. Null for statement-level trigger. For INSERT this is the new tuple. For DELETE and UPDATE it is the old tuple.';
-COMMENT ON COLUMN audit.logged_actions.changed_fields IS 'New values of fields changed by UPDATE. Null except for row-level UPDATE events.';
-COMMENT ON COLUMN audit.logged_actions.statement_only IS '''t'' if audit event is from an FOR EACH STATEMENT trigger, ''f'' for FOR EACH ROW';
+COMMENT ON TABLE auditoria.registro_comportamiento IS 'Rastro de las acciones auditables en las tablas auditadas, desde auditoria.if_modified_func()';
+COMMENT ON COLUMN auditoria.registro_comportamiento.event_id IS 'Identificador único para cada evento auditable';
+COMMENT ON COLUMN auditoria.registro_comportamiento.schema_name IS 'Esquema de tabla de auditoría de base de datos para este evento es en';
+COMMENT ON COLUMN auditoria.registro_comportamiento.table_name IS 'Non-schema-qualified nombre del evento se produjo en la tabla';
+COMMENT ON COLUMN auditoria.registro_comportamiento.relid IS 'Tabla OID. Los cambios de la drop/create. Obtener con ''tablename''::regclass';
+COMMENT ON COLUMN auditoria.registro_comportamiento.session_user_name IS 'Login/session nombre usuario que provoco el evento auditado';
+COMMENT ON COLUMN auditoria.registro_comportamiento.action_tstamp_tx IS 'Transacción fecha y hora de inicio de tx en el que se produjo evento auditado';
+COMMENT ON COLUMN auditoria.registro_comportamiento.action_tstamp_stm IS 'Declaración de fecha y hora inicio de tx en el que se produjo evento auditado';
+COMMENT ON COLUMN auditoria.registro_comportamiento.action_tstamp_clk IS 'Tiempo en la que audita evento''s llamada de trigger';
+COMMENT ON COLUMN auditoria.registro_comportamiento.transaction_id IS 'Identificador de transacción que hizo el cambio. Puede envolver, pero se combina con action_tstamp_tx.';
+COMMENT ON COLUMN auditoria.registro_comportamiento.client_addr IS 'Dirección IP del cliente que emitió la consulta. Null para socket UNIX.';
+COMMENT ON COLUMN auditoria.registro_comportamiento.client_port IS 'distancia entre dirección IP del puerto de cliente que emitió la consulta. Indefinido deunix socket.';
+COMMENT ON COLUMN auditoria.registro_comportamiento.client_query IS 'Top-level consulta que causó este evento auditable. Puede haber más de una declaración.';
+COMMENT ON COLUMN auditoria.registro_comportamiento.application_name IS 'Application name set when this audit event occurred. Can be changed in-session by client.';
+COMMENT ON COLUMN auditoria.registro_comportamiento.action IS 'Acción; I = insert, D = delete, U = update, T = truncate';
+COMMENT ON COLUMN auditoria.registro_comportamiento.row_data IS 'Valor de registro. Null para statement-level trigger. Para INSERT esta es la nueva tupla. Para DELETE y UPDATE es la ultima tupla.';
+COMMENT ON COLUMN auditoria.registro_comportamiento.changed_fields IS 'Los nuevos valores de los campos modificados por UPDATE. Null excepto por row-level UPDATE eventos.';
+COMMENT ON COLUMN auditoria.registro_comportamiento.statement_only IS '''t'' si el evento es de una auditoría FOR EACH STATEMENT trigger, ''f'' para FOR EACH ROW';
 
-CREATE INDEX logged_actions_relid_idx ON audit.logged_actions(relid);
-CREATE INDEX logged_actions_action_tstamp_tx_stm_idx ON audit.logged_actions(action_tstamp_stm);
-CREATE INDEX logged_actions_action_idx ON audit.logged_actions(action);
+CREATE INDEX logged_actions_relid_idx ON auditoria.registro_comportamiento(relid);
+CREATE INDEX logged_actions_action_tstamp_tx_stm_idx ON auditoria.registro_comportamiento(action_tstamp_stm);
+CREATE INDEX logged_actions_action_idx ON auditoria.registro_comportamiento(action);
 
-CREATE OR REPLACE FUNCTION audit.if_modified_func() RETURNS TRIGGER AS $body$
+CREATE OR REPLACE FUNCTION auditoria.if_modified_func() RETURNS TRIGGER AS $body$
 DECLARE
-    audit_row audit.logged_actions;
+    audit_row audit.registro_comportamiento;
     include_values boolean;
     log_diffs boolean;
     h_old hstore;
@@ -138,7 +132,7 @@ BEGIN
         RAISE EXCEPTION '[audit.if_modified_func] - Trigger func added as trigger for unhandled case: %, %',TG_OP, TG_LEVEL;
         RETURN NULL;
     END IF;
-    INSERT INTO audit.logged_actions VALUES (audit_row.*);
+    INSERT INTO auditoria.logged_actions VALUES (audit_row.*);
     RETURN NULL;
 END;
 $body$
@@ -147,7 +141,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, public;
 
 
-COMMENT ON FUNCTION audit.if_modified_func() IS $body$
+COMMENT ON FUNCTION auditoria.if_modified_func() IS $body$
 Track changes to a table at the statement and/or row level.
 
 Optional parameters to trigger in CREATE TRIGGER call:
@@ -180,7 +174,7 @@ $body$;
 
 
 
-CREATE OR REPLACE FUNCTION audit.audit_table(target_table regclass, audit_rows boolean, audit_query_text boolean, ignored_cols text[]) RETURNS void AS $body$
+CREATE OR REPLACE FUNCTION auditoria.audit_table(target_table regclass, audit_rows boolean, audit_query_text boolean, ignored_cols text[]) RETURNS void AS $body$
 DECLARE
   stm_targets text = 'INSERT OR UPDATE OR DELETE OR TRUNCATE';
   _q_txt text;
@@ -195,7 +189,7 @@ BEGIN
         END IF;
         _q_txt = 'CREATE TRIGGER audit_trigger_row AFTER INSERT OR UPDATE OR DELETE ON ' || 
                  quote_ident(target_table::TEXT) || 
-                 ' FOR EACH ROW EXECUTE PROCEDURE audit.if_modified_func(' ||
+                 ' FOR EACH ROW EXECUTE PROCEDURE auditoria.if_modified_func(' ||
                  quote_literal(audit_query_text) || _ignored_cols_snip || ');';
         RAISE NOTICE '%',_q_txt;
         EXECUTE _q_txt;
@@ -205,7 +199,7 @@ BEGIN
 
     _q_txt = 'CREATE TRIGGER audit_trigger_stm AFTER ' || stm_targets || ' ON ' ||
              target_table ||
-             ' FOR EACH STATEMENT EXECUTE PROCEDURE audit.if_modified_func('||
+             ' FOR EACH STATEMENT EXECUTE PROCEDURE auditoria.if_modified_func('||
              quote_literal(audit_query_text) || ');';
     RAISE NOTICE '%',_q_txt;
     EXECUTE _q_txt;
@@ -214,25 +208,25 @@ END;
 $body$
 language 'plpgsql';
 
-COMMENT ON FUNCTION audit.audit_table(regclass, boolean, boolean, text[]) IS $body$
+COMMENT ON FUNCTION auditoria.audit_table(regclass, boolean, boolean, text[]) IS $body$
 Add auditing support to a table.
 
 Arguments:
    target_table:     Table name, schema qualified if not on search_path
-   audit_rows:       Record each row change, or only audit at a statement level
+   audit_rows:       Record each row change, or only auditoria at a statement level
    audit_query_text: Record the text of the client query that triggered the audit event?
    ignored_cols:     Columns to exclude from update diffs, ignore updates that change only ignored cols.
 $body$;
 
 -- Pg doesn't allow variadic calls with 0 params, so provide a wrapper
-CREATE OR REPLACE FUNCTION audit.audit_table(target_table regclass, audit_rows boolean, audit_query_text boolean) RETURNS void AS $body$
-SELECT audit.audit_table($1, $2, $3, ARRAY[]::text[]);
+CREATE OR REPLACE FUNCTION auditoria.audit_table(target_table regclass, audit_rows boolean, audit_query_text boolean) RETURNS void AS $body$
+SELECT auditoria.audit_table($1, $2, $3, ARRAY[]::text[]);
 $body$ LANGUAGE SQL;
 
 -- And provide a convenience call wrapper for the simplest case
 -- of row-level logging with no excluded cols and query logging enabled.
 --
-CREATE OR REPLACE FUNCTION audit.audit_table(target_table regclass) RETURNS void AS $body$
+CREATE OR REPLACE FUNCTION auditoria.audit_table(target_table regclass) RETURNS void AS $body$
 SELECT audit.audit_table($1, BOOLEAN 't', BOOLEAN 't');
 $body$ LANGUAGE 'sql';
 
